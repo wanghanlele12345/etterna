@@ -1,4 +1,6 @@
-# AI 驱动的律动游戏 / AI-driven rhythm game
+# AI-driven rhythm game
+
+**English** | [简体中文](README.zh-CN.md)
 
 A fork of [Etterna](https://github.com/etternagame/etterna) in which a language model writes the
 charts. Give it a music video: it listens to the song, looks at the chart it drafted, reworks the
