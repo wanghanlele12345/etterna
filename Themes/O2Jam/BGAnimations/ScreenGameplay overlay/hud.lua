@@ -297,9 +297,9 @@ end)
 t[#t + 1] = sprite("EnergyBack", "energy_back", O2.energyX - 12 * k, 30 * k, 24 * k, 540 * k)
 t[#t + 1] = sprite("EnergyFill", "energy_fill", O2.energyX - 9 * k, 36 * k, 18 * k, 528 * k)
 
--- the divider's beat pulse
+-- the divider's beat pulse; drawn above the bottom bar, so it stops where the lanes do
 t[#t + 1] = sprite("Pulse", "strip", O2.stripX, 0, 24 * k, H, function(self)
-    self:blend("BlendMode_Add"):diffusealpha(0)
+    self:blend("BlendMode_Add"):diffusealpha(0):cropbottom(1 - O2.regionBottom / H)
 end)
 
 -- judgment table

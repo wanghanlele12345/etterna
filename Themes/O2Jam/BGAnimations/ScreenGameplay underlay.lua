@@ -72,7 +72,13 @@ end
 
 -- record cells + energy column
 t[#t + 1] = quad(fieldRight + 3 * k, 0, O2.stripX - fieldRight - 3 * k, O2.regionBottom, colors.bg0, 0.55)
-t[#t + 1] = sprite("strip", O2.stripX, 0, 24 * k, H)
+t[#t + 1] = Def.Sprite {
+    Texture = O2.gfx("strip"),
+    InitCommand = function(self)
+        -- a full-height texture, cut (not squashed) where the lanes end
+        self:halign(0):valign(0):xy(O2.stripX, 0):zoomto(24 * k, H):cropbottom(1 - O2.regionBottom / H)
+    end,
+}
 
 -- right column cards
 t[#t + 1] = sprite("panel_info", O2.info.x, O2.info.y, O2.info.w, O2.info.h)
