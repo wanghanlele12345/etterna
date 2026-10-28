@@ -34,6 +34,8 @@ _NOTATION_HELP = "write slot:lane like s4:3, s8:2+6 (jump), s8:H3 (hold start), 
 _SUPPORT_REACH = 1  # a note is "supported" by a melody onset or drum hit this many slots away
 _DENSITY_SLACK = 1.3
 _UNSUPPORTED_WARN_SHARE = 0.4
+_LONG_SUNG_SLOTS = SLOTS_PER_MEASURE  # a sung note this long (4 beats) is a held vowel: it wants a hold
+_LONG_NOTES_LISTED = 10
 _SIMILAR_MIN = 0.5
 _SIMILAR_LISTED = 2
 _VOCABULARY_SIZE = 6
@@ -220,6 +222,35 @@ def _rows(measures: list[Slots]) -> list[tuple[int, int, int, Cells]]:
     ]
 
 
+def _unheld_long_notes(loaded: LoadedChart, measures: list[Slots]) -> list[dict[str, Any]]:
+    """Sustained sung notes the chart plays as a tap, or not at all, instead of a hold.
+
+    The "answers N% of the sung notes" figures cannot show this: a tap on a held vowel's
+    first slot counts as answering it. Beginner charts have no holds by design.
+    """
+    profile = charting.PROFILE_BY_NAME.get(loaded.block.difficulty.lower())
+    if loaded.facts is None or (profile is not None and profile.melody_hold_ratio <= 0):
+        return []
+    heads = {slot for slot, _, _, cells in _rows(measures) if "2" in cells.values()}
+    return [
+        n for n in loaded.facts.get("melody", [])
+        if n["length_slots"] >= _LONG_SUNG_SLOTS
+        and not any(n["slot"] + d in heads for d in range(-_SUPPORT_REACH, _SUPPORT_REACH + 1))
+    ]
+
+
+def _unheld_text(notes: list[dict[str, Any]]) -> str:
+    listed = ", ".join(
+        f"m{n['slot'] // SLOTS_PER_MEASURE}@{n['slot'] % SLOTS_PER_MEASURE}/{n['length_slots']}"
+        for n in notes[:_LONG_NOTES_LISTED]
+    )
+    more = f" and {len(notes) - _LONG_NOTES_LISTED} more" if len(notes) > _LONG_NOTES_LISTED else ""
+    return (
+        f"{len(notes)} long sung notes (4+ beats) not played as holds: {listed}{more} "
+        "(a held vowel wants a hold: sSLOT:Hlane at its start, s..:|lane where it ends)"
+    )
+
+
 def _stats(loaded: LoadedChart, measures: list[Slots]) -> dict[str, Any]:
     rows = [(slot, cells) for slot, _, _, cells in _rows(measures) if _pressed(cells)]
     seconds = len(measures) * SLOTS_PER_MEASURE * loaded.slot_seconds
@@ -252,6 +283,7 @@ def _stats(loaded: LoadedChart, measures: list[Slots]) -> dict[str, Any]:
         "rows_per_second": round(len(rows) / seconds, 2) if seconds else 0.0,
         "target_rows_per_second": profile.target_rows_per_second if profile else None,
         "unsupported_notes": unsupported,
+        "long_notes_not_held": None if loaded.facts is None else len(_unheld_long_notes(loaded, measures)),
         "supported_share": None if unsupported is None or not rows else round(1 - unsupported / len(rows), 2),
         "rhythm_vocabulary": round(vocabulary, 2),
         "reach_violations": leaps,
@@ -298,6 +330,9 @@ def _warnings(loaded: LoadedChart, measures: list[Slots], stats: dict[str, Any])
                 f"{stats['unsupported_notes']} of {stats['rows']} notes have nothing to hear nearby "
                 "(no melody onset or drum hit within a slot)"
             )
+    unheld = _unheld_long_notes(loaded, measures)
+    if unheld:
+        warnings.append(_unheld_text(unheld))
     busy = 0
     held: set[int] = set()
     for _, _, _, cells in _rows(measures):
@@ -383,6 +418,9 @@ def inspect_chart(
         "'like mN(similarity)' = this measure sounds like an earlier one",
         f"stats: {json.dumps(stats, ensure_ascii=False)}",
     ]
+    unheld = _unheld_long_notes(loaded, loaded.measures)
+    if unheld:
+        lines.append(_unheld_text(unheld))
     if sections:
         lines.append(
             "sections: " + ", ".join(f"{sec['label']} m{sec['start']}-{sec['end']}" for sec in sections)

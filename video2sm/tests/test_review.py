@@ -181,6 +181,47 @@ def test_a_note_on_the_second_part_has_something_to_hear(tmp_path: Path) -> None
     assert review.inspect_chart(path, "Easy", 0, 1)["stats"]["unsupported_notes"] == 0
 
 
+def add_long_sung_note(tmp_path: Path, slot: int = 8, length: int = 20) -> None:
+    facts_path = tmp_path / "music.json"
+    facts = json.loads(facts_path.read_text(encoding="utf-8"))
+    facts["melody"].append({"slot": slot, "length_slots": length, "midi": 69, "name": "A4", "strength": 1.0})
+    facts_path.write_text(json.dumps(facts), encoding="utf-8")
+
+
+HELD_VOWEL = [measure_from({8: row(chars={3: "2"})}), measure_from({4: row(chars={3: "3"})})]
+TAPPED_VOWEL = [measure_from({8: row(3)}), measure_from({})]
+
+
+def test_a_long_sung_note_played_as_a_tap_is_called_out(tmp_path: Path) -> None:
+    path = build_song(tmp_path, measures=TAPPED_VOWEL, difficulty="Medium")
+    add_long_sung_note(tmp_path)  # a held vowel of 20 slots at m0 s8
+    report = review.inspect_chart(path, "Medium", 0, 2)
+    assert report["stats"]["long_notes_not_held"] == 1
+    assert "not played as holds: m0@8/20" in report["text"]
+    edited = review.edit_chart(path, "Medium", [{"measure": 1, "notes": "s0:1"}])
+    assert any("m0@8/20" in w and "hold" in w for w in edited["warnings"])
+
+
+def test_a_held_vowel_that_is_a_hold_is_not_flagged(tmp_path: Path) -> None:
+    path = build_song(tmp_path, measures=HELD_VOWEL, difficulty="Medium")
+    add_long_sung_note(tmp_path)
+    report = review.inspect_chart(path, "Medium", 0, 2)
+    assert report["stats"]["long_notes_not_held"] == 0
+    assert "not played as holds" not in report["text"]
+
+
+def test_beginner_charts_have_no_holds_so_nothing_is_flagged(tmp_path: Path) -> None:
+    path = build_song(tmp_path, measures=TAPPED_VOWEL, difficulty="Beginner")
+    add_long_sung_note(tmp_path)
+    assert review.inspect_chart(path, "Beginner", 0, 2)["stats"]["long_notes_not_held"] == 0
+
+
+def test_short_sung_notes_are_never_flagged(tmp_path: Path) -> None:
+    path = build_song(tmp_path, measures=TAPPED_VOWEL, difficulty="Medium")
+    add_long_sung_note(tmp_path, length=12)  # three beats: a held note, but not a held vowel
+    assert review.inspect_chart(path, "Medium", 0, 2)["stats"]["long_notes_not_held"] == 0
+
+
 # --- editing ----------------------------------------------------------------------------------
 
 

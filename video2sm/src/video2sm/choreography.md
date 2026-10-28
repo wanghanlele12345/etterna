@@ -34,11 +34,28 @@ the video) and check (playability). **You decide how the fingers should move.**
   drum anchors per measure; on harder charts add more of the drum pattern.
 - **Long sung notes are holds.** A held vowel becomes a hold on the lane of its pitch, and
   the hold ends when the vowel ends (not on a convenient grid line). While a hold is down,
-  play only single notes with the other hand.
+  play only single notes with the other hand. A held note played as a single tap, with
+  something else pressed over the rest of it, reads as "the singer was ignored".
+- **The peak gets the most care.** The loudest measures (`e8`, `e9`) and the longest held
+  notes are where the song means the most: a belted, sustained high note is the emotional
+  climax, and the chart must show it (a hold for its whole length, the lane of its pitch,
+  nothing busy competing with it). A chart can be 95% "answered" and still miss its climax.
+- **Whoever is loudest leads.** Where the strings, guitar or piano are louder than the voice
+  (an instrumental intro, a bridge, the outro) the `melody` lines are theirs: follow them,
+  do not leave those measures empty or fill them with drums alone. A measure that inspect
+  shows as `(silent)` while the music is loud (`e5` or more) means something was not heard:
+  look at the video and `analyze_video_notes` before accepting it.
+- **Drums only where a drummer plays.** The draft already drops drum hits from measures
+  where the drum stem is only leakage from the other instruments. If a quiet, drumless verse
+  (`e0`-`e2`) still shows steady kick and snare in your chart, that is leakage: remove it.
 - **Energy has an arc.** Use the loudness (`eN`) and the sections: sparse and simple in a
   quiet verse, fuller in the chorus. A repeated section should feel like itself.
 
 ## Difficulty
+
+Ask the player where they are. Many cannot play Medium comfortably: if they say a chart is
+too hard, lower the density (thin the busy sections, keep the downbeats, the holds on long
+vowels and the climax) instead of leaving it as the target says.
 
 Density targets in notes per second (the stats show where a chart stands):
 Beginner ~0.9, Easy ~1.4, Medium ~2.3, Hard ~3.3. Easier charts use fewer lanes at a time,
@@ -54,11 +71,24 @@ easy chart plays harder than its target, thin it out instead of keeping every su
    and lane contour, then write the measures with `edit_chart`.
 3. Reuse: write one good measure, `copy` it to the measures that sound like it, and
    `repeat` whole reprised sections, then adjust.
-4. Read `warnings` after every edit and fix them (density, reach, unsupported notes).
+4. Read `warnings` after every edit and fix them (density, reach, unsupported notes, long
+   sung notes not played as holds).
 5. `view_chart` again; if it still looks scattered, simplify. Finish with a pass over the
    whole chart checking that repeated music got repeated patterns and that late sections
    answer the singing as well as early ones.
-6. Last, `align_chart`: it moves every note onto the exact attack it answers and ends holds
+6. Audit before you finish. The "answers N% of the sung notes" figures do not catch a held
+   vowel played as one tap, so check these yourself:
+   - the `long sung notes (4+ beats) not played as holds: m40@2/20 ...` line in the
+     `inspect_chart` header (and in the `warnings`): give each one a hold, starting with the
+     longest and the loudest. Easy and above only; Beginner charts have no holds.
+   - the loudest sections (highest `eN`): view them, and read their sustained notes
+     (`NAME@SLOT/LENGTH` with a length of 8 or more) against the chart.
+   - the sections without singing (intro, bridges, outro): they must follow whoever leads
+     (strings, piano...), not sit empty.
+   - the build warnings: "onsets drift ... check sync" means the tempo may vary or the beat
+     grid is off; a chart on a shifted grid feels wrong everywhere, so fix the offset
+     (`adjust_song_offset`) before polishing notes.
+7. Last, `align_chart`: it moves every note onto the exact attack it answers and ends holds
    with the voice, without changing your choreography. Run it again after any later edit.
 
 ## Notation
