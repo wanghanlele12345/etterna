@@ -11,6 +11,7 @@ Rows are strings with one character per column: 0 empty, 1 tap, 2 hold head,
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -358,14 +359,33 @@ def _jump_allowed(cursor: _Cursor, slot: int, profile: Profile) -> bool:
     return cursor.jumps < profile.max_jump_ratio * (cursor.events + 1)
 
 
-def _melody_hold_end(
-    event: events.Event, n_slots: int, profile: Profile, cursor: _Cursor, enabled: bool
-) -> int | None:
-    if not enabled or event.kind != events.MELODY or profile.melody_hold_ratio <= 0:
-        return None
-    if cursor.holds >= profile.melody_hold_ratio * (cursor.events + 1):
-        return None
-    return _hold_release(event.slot, event.length_slots, n_slots)
+def _hold_slots(
+    chosen: list[events.Event], n_slots: int, profile: Profile, enabled: bool
+) -> frozenset[int]:
+    """The slots of the melody events that become holds: the longest sustained notes.
+
+    A difficulty allows holds on a share of its notes, so they go where a hold is most
+    needed: the longest held notes, not whichever qualifying notes come first. Holds
+    never overlap each other.
+    """
+    if not enabled or profile.melody_hold_ratio <= 0:
+        return frozenset()
+    quota = math.ceil(profile.melody_hold_ratio * len(chosen))
+    spans: list[tuple[int, int]] = []
+    held = []
+    candidates = []
+    for event in chosen:
+        release = _hold_release(event.slot, event.length_slots, n_slots) if event.kind == events.MELODY else None
+        if release is not None:
+            candidates.append((release - event.slot, event.slot, release))
+    for length, slot, release in sorted(candidates, key=lambda c: (-c[0], c[1])):
+        if len(held) >= quota:
+            break
+        if any(slot <= end and release >= start for start, end in spans):
+            continue
+        spans.append((slot, release))
+        held.append(slot)
+    return frozenset(held)
 
 
 def _assign_event_columns(
@@ -376,6 +396,7 @@ def _assign_event_columns(
     rng: np.random.Generator,
     holds: bool,
 ) -> _Placed:
+    hold_slots = _hold_slots(chosen, n_slots, profile, holds)
     cursor = _Cursor(usage=(0,) * layout.columns)
     placed: _Placed = {}
     held: tuple[tuple[int, int], ...] = ()
@@ -384,15 +405,16 @@ def _assign_event_columns(
         held = tuple(h for h in held if h[1] >= slot)
         blocked = frozenset(column for column, _ in held)
         end: int | None = None
-        if not held and event.partner is not None and _jump_allowed(cursor, slot, profile):
+        wants_hold = slot in hold_slots and not held
+        if not held and not wants_hold and event.partner is not None and _jump_allowed(cursor, slot, profile):
             columns: tuple[int, ...] = _pick_jump(cursor, layout, rng, event.lane)
             is_jump = True
         else:
             bonus = _event_bonus(event, layout)
             columns = (_pick_column(cursor, None, profile, layout, blocked, rng, bonus),)
             is_jump = False
-            if not held:
-                end = _melody_hold_end(event, n_slots, profile, cursor, holds)
+            if wants_hold:
+                end = _hold_release(slot, event.length_slots, n_slots)
         held = _record(placed, slot, columns, end) or held
         cursor = _advance(cursor, slot, columns, is_jump, end is not None)
     return placed

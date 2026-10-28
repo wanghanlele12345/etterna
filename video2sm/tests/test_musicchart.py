@@ -132,6 +132,38 @@ def test_holds_never_overlap_and_nothing_else_is_pressed_in_their_column() -> No
             assert len(pressed_columns(row)) <= 1
 
 
+def hold_heads(chart: charting.Chart) -> list[int]:
+    return [slot for slot, row in timed_rows(chart) if "2" in row]
+
+
+def short_notes_with_two_long_ones() -> list[Note]:
+    """Twenty notes a beat apart, short but for two held for a whole measure."""
+    long_at = {3, 12}
+    return [note(8 + i * 8, 16 if i in long_at else 4, 55 + (i * 3) % 12) for i in range(20)]
+
+
+def test_the_longest_sung_notes_get_the_holds_not_the_first_ones() -> None:
+    chart = build("Medium", music(short_notes_with_two_long_ones()))
+    # a hold is the way to play a sustained note: the two held vowels come first, and only
+    # what is left of the share goes to a short note (the old rule gave it all to early blips)
+    heads = hold_heads(chart)
+    assert {8 + 3 * 8, 8 + 12 * 8} <= set(heads)
+    assert len(heads) <= 3
+
+
+def test_holds_still_stay_within_the_difficulty_share() -> None:
+    notes = short_notes_with_two_long_ones()
+    chart = build("Medium", music(notes))
+    share = PROFILES["Medium"].melody_hold_ratio
+    assert len(hold_heads(chart)) <= np.ceil(share * len(notes))
+
+
+def test_a_long_note_that_also_has_a_drum_hit_is_still_held() -> None:
+    notes = short_notes_with_two_long_ones()
+    chart = build("Hard", music(notes, kicks=[8 + 3 * 8, 8 + 12 * 8]))
+    assert {8 + 3 * 8, 8 + 12 * 8} <= set(hold_heads(chart))  # not turned into a two-key tap
+
+
 def test_holds_can_be_switched_off() -> None:
     notes = [note(8 + i * 12, 8, 55 + (i * 3) % 20) for i in range(24)]
     chart = build("Hard", music(notes), holds=False)
