@@ -43,11 +43,26 @@ the six most common rhythm patterns, a measure of how regular the chart is.
 
 | Tool | Purpose |
 |---|---|
-| `make_song_from_video` | Video in, song folder out. `difficulties`: `low` / `medium` / `high` (Easy / Medium / Hard) plus `beginner` (default: all four); `challenge`, `all` also accepted. `key_modes`: `dance-single` (`4k`, default) and/or `pnm-nine` (`9k`, `popn`), several allowed in one song. `holds`: hold notes on or off (default on). `chart_source`: `auto` (default), `stems` (requires Demucs), or `mix` |
+| `make_song_from_video` | Video in, song folder out (draft charts, `music.json`, banner, jacket, title cards). `difficulties`: `low` / `medium` / `high` (Easy / Medium / Hard) plus `beginner` (default: all four); `challenge`, `all` also accepted. `key_modes`: `kb7-single` (`7k`, default), `dance-single` (`4k`), `pnm-nine` (`9k`, `popn`), several allowed in one song. `holds`: hold notes on or off (default on). `chart_source`: `auto` (default), `stems` (requires Demucs), or `mix` |
+| `download_video`, `make_song_from_url` | The same from a YouTube link. `rights_basis` is required (why you may use the material); it is recorded, not verified |
 | `analyze_video_beats` | BPM / offset / confidence only, writes nothing |
 | `analyze_video_notes` | What the music contains: BPM, the vocal melody as a list of notes (time, length, MIDI, name), pitch range, kick/snare/hat counts. Needs Demucs. Writes nothing |
+| `choreography_guide` | What a good chart feels like and the working method (read before reworking a draft) |
+| `inspect_chart` | Measures next to the music they follow, which measures sound alike, and stats (density, rhythm regularity, leaps) |
+| `view_chart` | A picture of measures beside the melody and drums |
+| `look_at_video` | A contact sheet of video frames, labelled with time |
+| `edit_chart` | Rewrite / copy / repeat / clear measures; refuses unplayable edits, warns about density and reach; `dry_run` |
+| `align_chart` | Snap notes onto the sung attack or drum hit they answer; run after choreographing |
 | `validate_song` | Parse an `.ssc`, check timing, notes, and referenced files |
 | `adjust_song_offset` | Fix sync: positive `delta_ms` = notes later |
+
+## How it works
+
+Code gives the model senses and checks; the model makes the choreography decisions. See the
+[main README](../README.md#how-the-mcp-server-works) for the pipeline and the review loop. In short:
+`ffmpeg` and beat tracking, optional Demucs stems, pYIN melody and drum onsets are written to `music.json`;
+a draft is generated from them; the model reviews it with `inspect_chart` / `view_chart` / `look_at_video`,
+rewrites it with `edit_chart`, and `align_chart` then snaps the notes to the exact attacks.
 
 Songs go to `$VIDEO2SM_SONGS_DIR`, defaulting to the `Songs` folder next to the `video2sm` directory (the root of the
 Etterna checkout). Restart Etterna (or reload songs) to see new ones.
@@ -56,6 +71,7 @@ Etterna checkout). Restart Etterna (or reload songs) to see new ones.
 
 | Mode | Steps type | Columns | Notes |
 |---|---|---|---|
+| `7k` (default) | `kb7-single` | 7 | Etterna's `kb7` game mode, played on S D F Space J K L |
 | `4k` | `dance-single` | 4 | Etterna's main mode |
 | `9k` | `pnm-nine` | 9 | Only listed in Etterna's popn game mode. Etterna ships no default keyboard binding for the four white and green buttons, so bind all nine in the key settings |
 
