@@ -51,6 +51,9 @@
 !/Assets/Toasties/legacy/
 
 /NoteSkins/*
+!/NoteSkins/kb7/
+/NoteSkins/kb7/*
+!/NoteSkins/kb7/ink/
 !/NoteSkins/instructions.txt
 !/NoteSkins/beat/default/
 !/NoteSkins/common/
@@ -88,3 +91,10 @@
 !/Themes/Til Death
 !/Themes/bare-frames
 !/Themes/Rebirth
+!/Themes/O2Jam
+
+# video2sm (MCP server) build and test leftovers
+/video2sm/.venv/
+/video2sm/.coverage
+/video2sm/.pytest_cache/
+/build-nospace/
