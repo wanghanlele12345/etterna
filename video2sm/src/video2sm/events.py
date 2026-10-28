@@ -40,6 +40,16 @@ _MIN_DRUM_PEAK = 1.0  # a band whose loudest hits are fainter than this has no c
 # Drums this far under everything heard in a measure are separation leak, not a drummer:
 # over whole measures, played drums sit 8-35 dB under the mix and leak 50 dB or more.
 _DRUMS_PLAYING_DB = -40.0
+# The melody follows whichever instrument is loudest in a measure. The voice is the default
+# lead; the other instruments (strings, guitar, piano...) take over only when clearly louder
+# than it, and only when they are really playing, not leaking: within this of the song's
+# loudest measure.
+_LEAD_MARGIN_DB = 3.0
+_LEAD_AUDIBLE_DB = -40.0
+# Harder charts also follow the second loudest melodic part: the one that is not leading,
+# when it is within this of the lead. Further down it is background, not a part worth a key.
+_SECOND_PART_DB = -6.0
+_SECOND_PART_SCORE = 0.8  # of a lead note's, and with no lead priority: the lead wins a slot
 _PITCH_LOW_PERCENTILE = 5.0
 _PITCH_HIGH_PERCENTILE = 95.0
 _MIN_PITCH_SPREAD = 2.0  # semitones; a flatter melody all sits on the middle lane
@@ -63,6 +73,12 @@ class MusicFeatures:
     drum_onsets: tuple[tuple[float, ...], ...] = ((), (), ())  # kick, snare, hat bands
     # (n_slots,): whether a drummer plays in the slot's measure; None = throughout
     drums_playing: np.ndarray | None = None
+    # (n_slots,): whether the other instruments, not the voice, lead the slot's measure
+    lead_other: np.ndarray | None = None
+    # the second loudest melodic part (the voice under strings, or strings under the voice),
+    # only where it is close to the lead; harder charts play it too
+    second_melody: tuple[Note, ...] = ()
+    second_onsets: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,26 +100,126 @@ def _fit(values: np.ndarray, length: int) -> np.ndarray:
 
 
 def music_from_stems(stems: Stems, analysis: BeatAnalysis, n_slots: int) -> MusicFeatures:
-    """Read the vocal melody and drum hits of separated stems onto the chart's grid."""
+    """Read the lead melody and drum hits of separated stems onto the chart's grid.
+
+    The melody is the voice's, except in measures where the other instruments are clearly
+    louder (an instrumental intro, a string line between verses): there it is theirs.
+    """
     drums = features.extract_grid_features(stems.drums, analysis)
     vocals = features.extract_grid_features(stems.vocals, analysis)
+    first_beat = drums.first_beat_time
     measure_seconds = drums.slot_seconds * SLOTS_PER_MEASURE
-    playing = drums_playing(stems, drums.first_beat_time, measure_seconds, n_slots)
+    playing = drums_playing(stems, first_beat, measure_seconds, n_slots)
     playing_slots = np.repeat(playing, SLOTS_PER_MEASURE)[:n_slots]
+    others_lead, others_second, voice_second = melodic_roles(stems, first_beat, measure_seconds, n_slots)
+    lead_slots = np.repeat(others_lead, SLOTS_PER_MEASURE)[:n_slots]
+
+    vocal_strengths = _fit(vocals.strengths.max(axis=1), n_slots)
+    voice_notes = list(melody.transcribe(stems.vocals))
+    voice_onsets = [float(t) for t in timing.onset_times(stems.vocals)]
+    lead, lead_onsets = voice_notes, voice_onsets
+    second: list[Note] = []
+    second_onsets: list[float] = []
+    if others_lead.any() or others_second.any():
+        other_notes = list(melody.transcribe(stems.other))
+        other_onsets = [float(t) for t in timing.onset_times(stems.other)]
+        if others_lead.any():
+            others = features.extract_grid_features(stems.other, analysis)
+            vocal_strengths = np.where(lead_slots, _fit(others.strengths.max(axis=1), n_slots), vocal_strengths)
+            lead = _by_lead(voice_notes, other_notes, others_lead, first_beat, measure_seconds, _start)
+            lead_onsets = _by_lead(voice_onsets, other_onsets, others_lead, first_beat, measure_seconds, float)
+        second = sorted(
+            _in_measures(other_notes, others_second, first_beat, measure_seconds, _start)
+            + _in_measures(voice_notes, voice_second, first_beat, measure_seconds, _start),
+            key=_start,
+        )
+        second_onsets = sorted(
+            _in_measures(other_onsets, others_second, first_beat, measure_seconds, float)
+            + _in_measures(voice_onsets, voice_second, first_beat, measure_seconds, float)
+        )
     return MusicFeatures(
         n_slots=n_slots,
         slot_seconds=drums.slot_seconds,
-        first_beat_time=drums.first_beat_time,
+        first_beat_time=first_beat,
         drum_strengths=_fit(drums.strengths, n_slots) * playing_slots[:, None],
-        vocal_strengths=_fit(vocals.strengths.max(axis=1), n_slots),
-        melody=tuple(melody.transcribe(stems.vocals)),
-        vocal_onsets=tuple(timing.onset_times(stems.vocals)),
+        vocal_strengths=vocal_strengths,
+        melody=tuple(lead),
+        vocal_onsets=tuple(lead_onsets),
         drum_onsets=tuple(
-            _while_playing(band, playing, drums.first_beat_time, measure_seconds)
-            for band in band_onsets(stems.drums)
+            _while_playing(band, playing, first_beat, measure_seconds) for band in band_onsets(stems.drums)
         ),
         drums_playing=playing_slots,
+        lead_other=lead_slots,
+        second_melody=tuple(second),
+        second_onsets=tuple(second_onsets),
     )
+
+
+def _start(note: Note) -> float:
+    return note.start
+
+
+def _measure_powers(
+    audio, first_beat_time: float, measure_seconds: float, n_measures: int
+) -> np.ndarray:
+    """Mean power of the audio in each measure of the grid."""
+    samples, rate = audio.samples, audio.sample_rate
+    powers = np.zeros(n_measures)
+    for m in range(n_measures):
+        lo = max(0, int((first_beat_time + m * measure_seconds) * rate))
+        hi = min(len(samples), int((first_beat_time + (m + 1) * measure_seconds) * rate))
+        if hi > lo:
+            powers[m] = float(np.mean(samples[lo:hi].astype(np.float64) ** 2))
+    return powers
+
+
+def melodic_roles(
+    stems: Stems, first_beat_time: float, measure_seconds: float, n_slots: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per measure of the grid: (the others lead, the others are the second part, the voice is).
+
+    The voice is the default lead. The `other` stem (strings, guitar, piano...) takes the
+    measure when it is clearly louder than the voice and really playing, not a leak. The
+    part that is not leading is the second part when it is within a few dB of the lead.
+    """
+    n_measures = -(-n_slots // SLOTS_PER_MEASURE)
+    voice = _measure_powers(stems.vocals, first_beat_time, measure_seconds, n_measures)
+    other = _measure_powers(stems.other, first_beat_time, measure_seconds, n_measures)
+    mix = _measure_powers(stems.mixed(), first_beat_time, measure_seconds, n_measures)
+    loudest = float(mix.max()) if n_measures else 0.0
+    floor = loudest * 10 ** (_LEAD_AUDIBLE_DB / 10)
+    voice_playing = (voice >= floor) & (loudest > 0)
+    other_playing = (other >= floor) & (loudest > 0)
+    others_lead = other_playing & (other > voice * 10 ** (_LEAD_MARGIN_DB / 10))
+    close = 10 ** (_SECOND_PART_DB / 10)
+    others_second = other_playing & ~others_lead & (other >= voice * close)
+    voice_second = voice_playing & others_lead & (voice >= other * close)
+    return others_lead, others_second, voice_second
+
+
+def _measure_of(seconds: float, first_beat_time: float, measure_seconds: float) -> int:
+    return int(np.floor((seconds - first_beat_time) / measure_seconds))
+
+
+def _in_measures(items, wanted, first_beat_time, measure_seconds, time_of) -> list:
+    """The items that fall in a measure marked in `wanted`."""
+    kept = []
+    for item in items:
+        m = _measure_of(time_of(item), first_beat_time, measure_seconds)
+        if 0 <= m < len(wanted) and wanted[m]:
+            kept.append(item)
+    return kept
+
+
+def _by_lead(voice_items, other_items, other_leads, first_beat_time, measure_seconds, time_of) -> list:
+    """The voice's items outside the measures the others lead, theirs inside, in time order."""
+
+    def led_by_others(item) -> bool:
+        m = _measure_of(time_of(item), first_beat_time, measure_seconds)
+        return 0 <= m < len(other_leads) and bool(other_leads[m])
+
+    kept = [i for i in voice_items if not led_by_others(i)] + [i for i in other_items if led_by_others(i)]
+    return sorted(kept, key=time_of)
 
 
 def drums_playing(
@@ -115,21 +231,11 @@ def drums_playing(
     measured on a log scale, so in a drumless verse that leak reads as hits as crisp as
     real ones. Power over a whole measure (which the hits dominate) tells them apart.
     """
-    drum = stems.drums.samples.astype(np.float64)
-    mix = stems.mixed().samples.astype(np.float64)
-    rate = stems.drums.sample_rate
     n_measures = -(-n_slots // SLOTS_PER_MEASURE)
-    playing = np.zeros(n_measures, dtype=bool)
-    for m in range(n_measures):
-        lo = max(0, int((first_beat_time + m * measure_seconds) * rate))
-        hi = min(len(mix), int((first_beat_time + (m + 1) * measure_seconds) * rate))
-        if hi <= lo:
-            continue
-        mix_power = float(np.mean(mix[lo:hi] ** 2))
-        if mix_power > 0:
-            ratio = float(np.mean(drum[lo:hi] ** 2)) / mix_power
-            playing[m] = 10 * np.log10(max(ratio, 1e-12)) >= _DRUMS_PLAYING_DB
-    return playing
+    drum = _measure_powers(stems.drums, first_beat_time, measure_seconds, n_measures)
+    mix = _measure_powers(stems.mixed(), first_beat_time, measure_seconds, n_measures)
+    ratio = np.divide(drum, mix, out=np.zeros(n_measures), where=mix > 0)
+    return (mix > 0) & (10 * np.log10(np.maximum(ratio, 1e-12)) >= _DRUMS_PLAYING_DB)
 
 
 def _while_playing(
@@ -149,17 +255,19 @@ def band_onsets(audio) -> tuple[tuple[float, ...], ...]:
     return tuple(tuple(timing.onset_times(audio, fmin, fmax)) for fmin, fmax in features.BANDS_HZ)
 
 
-def pitch_lanes(notes: list[Note], columns: int) -> list[float]:
+def pitch_lanes(notes: list[Note], columns: int, reference: list[Note] | None = None) -> list[float]:
     """Map each note's pitch to a lane: higher notes sit further right.
 
-    The scale runs from the 5th to the 95th percentile of the melody's pitches, so a few
-    stray notes do not squash the rest into the middle of the keyboard.
+    The scale runs from the 5th to the 95th percentile of the melody's pitches (those of
+    `reference` when given, so a second part shares the lead's keyboard), so a few stray
+    notes do not squash the rest into the middle of the keyboard.
     """
     if not notes:
         return []
     pitches = np.array([n.pitch for n in notes])
-    low = float(np.percentile(pitches, _PITCH_LOW_PERCENTILE))
-    high = float(np.percentile(pitches, _PITCH_HIGH_PERCENTILE))
+    scale = np.array([n.pitch for n in reference]) if reference else pitches
+    low = float(np.percentile(scale, _PITCH_LOW_PERCENTILE))
+    high = float(np.percentile(scale, _PITCH_HIGH_PERCENTILE))
     top = columns - 1
     if high - low < _MIN_PITCH_SPREAD:
         return [top / 2.0] * len(notes)
@@ -186,9 +294,23 @@ def _snapped_slot(slot: int, music: MusicFeatures, profile: Profile) -> int | No
 
 
 def melody_events(music: MusicFeatures, profile: Profile, columns: int) -> list[Event]:
-    lanes = pitch_lanes(list(music.melody), columns)
+    found = _part_events(music.melody, music.melody, music, profile, columns, 1.0, _MELODY_PRIORITY)
+    if profile.melodic_parts >= 2:
+        # the second part plays on the lead's keyboard, and never outbids the lead for a slot
+        scale = music.melody or music.second_melody
+        found += _part_events(
+            music.second_melody, scale, music, profile, columns, _SECOND_PART_SCORE, 0.0
+        )
+    return found
+
+
+def _part_events(
+    notes: tuple[Note, ...], scale: tuple[Note, ...], music: MusicFeatures, profile: Profile,
+    columns: int, weight: float, priority: float,
+) -> list[Event]:
+    lanes = pitch_lanes(list(notes), columns, list(scale))
     found = []
-    for note, lane in zip(music.melody, lanes):
+    for note, lane in zip(notes, lanes):
         raw = _slot_of(note.start, music)
         if not 0 <= raw < music.n_slots:
             continue
@@ -203,7 +325,7 @@ def melody_events(music: MusicFeatures, profile: Profile, columns: int) -> list[
             Event(
                 slot=slot,
                 kind=MELODY,
-                score=profile.melody_weight * score + _MELODY_PRIORITY,
+                score=profile.melody_weight * score * weight + priority,
                 lane=lane,
                 length_slots=length,
             )
@@ -317,25 +439,30 @@ def describe_music(music: MusicFeatures, max_notes: int) -> dict[str, Any]:
     }
 
 
-def music_facts(music: MusicFeatures, bpm: float, chart_source: str) -> dict[str, Any]:
-    """Plain data of what was heard, saved next to a song so charts can be reviewed against it."""
-    sung = np.array(music.vocal_onsets)
-    melody_notes = []
-    for note in music.melody:
+def _melody_facts(notes, onsets: np.ndarray, music: MusicFeatures) -> list[dict[str, Any]]:
+    facts = []
+    for note in notes:
         slot = _slot_of(note.start, music)
         if not 0 <= slot < music.n_slots:
             continue
-        melody_notes.append(
+        facts.append(
             {
                 "slot": slot,
                 "length_slots": max(_slot_of(note.end, music) - slot, 0),
                 "midi": round(note.pitch),
                 "name": librosa.midi_to_note(round(note.pitch), unicode=False),
                 "strength": round(note.strength, 2),
-                "start_time": round(timing.refined_start(note.start, sung), 4),
+                "start_time": round(timing.refined_start(note.start, onsets), 4),
                 "end_time": round(note.end, 4),
             }
         )
+    return facts
+
+
+def music_facts(music: MusicFeatures, bpm: float, chart_source: str) -> dict[str, Any]:
+    """Plain data of what was heard, saved next to a song so charts can be reviewed against it."""
+    melody_notes = _melody_facts(music.melody, np.array(music.vocal_onsets), music)
+    second_notes = _melody_facts(music.second_melody, np.array(music.second_onsets), music)
     hits = drum_events(music, _ALL_DRUMS)
     reach = 0.6 * music.slot_seconds  # a drum hit is heard within this of its grid line
     drum_times: dict[str, list[float]] = {kind: [] for kind in _DRUM_KINDS}
@@ -344,7 +471,7 @@ def music_facts(music: MusicFeatures, bpm: float, chart_source: str) -> dict[str
         band = np.array(music.drum_onsets[_DRUM_KINDS.index(event.kind)])
         exact = timing.nearest(band, grid, reach, reach)
         drum_times[event.kind].append(round(grid if exact is None else exact, 4))
-    return {
+    facts = {
         "version": 1,
         "chart_source": chart_source,
         "bpm": round(bpm, 3),
@@ -352,6 +479,13 @@ def music_facts(music: MusicFeatures, bpm: float, chart_source: str) -> dict[str
         "slot_seconds": music.slot_seconds,
         "n_slots": music.n_slots,
         "melody": melody_notes,
+        "second_melody": second_notes,
         "drums": {kind: [e.slot for e in hits if e.kind == kind] for kind in _DRUM_KINDS},
         "drum_times": drum_times,
     }
+    if music.lead_other is not None:
+        facts["lead"] = [
+            "other" if music.lead_other[slot] else "vocals"
+            for slot in range(0, music.n_slots, SLOTS_PER_MEASURE)
+        ]
+    return facts

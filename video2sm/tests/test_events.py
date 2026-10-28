@@ -283,6 +283,175 @@ def test_a_soft_drum_part_still_counts(click_wav, vocal_wav) -> None:
     assert len(found.drum_onsets[0]) >= 60
 
 
+# --- the loudest instrument leads ----------------------------------------------------------
+
+LEAD_NOTE_MIDI = 76.0  # far above anything the vocal track sings (57..70.5)
+
+
+def other_track(first_second: float, gain: float = 0.5) -> np.ndarray:
+    """One steady note per beat from `first_second` on: the strings under (or instead of) the voice."""
+    from tests.conftest import DURATION, SAMPLE_RATE, TRUE_BPM, TRUE_FIRST_BEAT, VOCAL_NOTE_SECONDS
+
+    signal = np.zeros(int(DURATION * SAMPLE_RATE), dtype=np.float32)
+    t = np.arange(int(VOCAL_NOTE_SECONDS * SAMPLE_RATE)) / SAMPLE_RATE
+    hz = 440.0 * 2 ** ((LEAD_NOTE_MIDI - 69.0) / 12.0)
+    fade = np.minimum(1.0, np.minimum(t, VOCAL_NOTE_SECONDS - t) / 0.02)
+    tone = (gain * np.sin(2 * np.pi * hz * t) * fade).astype(np.float32)
+    beat = 0
+    while True:
+        start = TRUE_FIRST_BEAT + beat * 60.0 / TRUE_BPM
+        if start + VOCAL_NOTE_SECONDS + 0.05 >= DURATION:
+            break
+        if start >= first_second:
+            index = int(start * SAMPLE_RATE)
+            signal[index : index + len(t)] += tone
+        beat += 1
+    return signal
+
+
+def lead_stems(click_wav, vocal_wav, other: np.ndarray, vocal_gain_after_half: float = 1.0):
+    """Stems with the voice singing throughout (quieter after the half, if asked) and `other` beside it."""
+    import dataclasses
+
+    from video2sm import dsp
+
+    base = synthetic_stems(click_wav, vocal_wav)
+    gain = np.ones_like(base.vocals.samples)
+    gain[len(gain) // 2 :] = vocal_gain_after_half
+    vocals = dsp.Audio(samples=(base.vocals.samples * gain).astype(np.float32), sample_rate=base.vocals.sample_rate)
+    other_audio = dsp.Audio(samples=other, sample_rate=base.vocals.sample_rate)
+    return dataclasses.replace(base, vocals=vocals, other=other_audio)
+
+
+def test_the_melody_follows_whichever_instrument_is_loudest(click_wav, vocal_wav) -> None:
+    from tests.conftest import DURATION
+
+    half = DURATION / 2
+    # the voice sings the first half, then drops 40 dB while the strings carry on loudly
+    stems_ = lead_stems(click_wav, vocal_wav, other_track(first_second=half), vocal_gain_after_half=0.01)
+    found = stem_music(click_wav, stems_)
+
+    measure = SLOTS_PER_MEASURE * found.slot_seconds
+    early = [n for n in found.melody if n.start < half - measure]
+    late = [n for n in found.melody if n.start > half + measure]
+    assert len(early) >= 20 and len(late) >= 20
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) > 3 for n in early)  # the voice
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) < 0.6 for n in late)  # the strings
+    # exact attacks come from the leading instrument too
+    assert any(t > half + measure for t in found.vocal_onsets)
+    assert found.lead_other is not None and len(found.lead_other) == found.n_slots
+    assert not found.lead_other[: found.n_slots // 4].any() and found.lead_other[-found.n_slots // 4 :].all()
+
+
+def test_the_voice_keeps_the_lead_unless_the_others_are_clearly_louder(click_wav, vocal_wav) -> None:
+    # the same note positions, the other instrument 1.5 dB louder: not enough to take over
+    stems_ = lead_stems(click_wav, vocal_wav, other_track(first_second=0.0, gain=0.5 * 10 ** (1.5 / 20)))
+    found = stem_music(click_wav, stems_)
+    assert len(found.melody) >= 60
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) > 3 for n in found.melody)
+    assert found.lead_other is not None and not found.lead_other.any()
+
+
+def test_a_leak_into_the_other_stem_never_leads(click_wav, vocal_wav) -> None:
+    from tests.conftest import DURATION
+
+    # after the half the voice is silent and the "other" stem holds only a 60 dB-down trace
+    half = DURATION / 2
+    stems_ = lead_stems(
+        click_wav, vocal_wav, other_track(first_second=half, gain=0.5 * 10 ** (-60 / 20)),
+        vocal_gain_after_half=0.0,
+    )
+    found = stem_music(click_wav, stems_)
+    assert found.lead_other is not None and not found.lead_other.any()
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) > 3 for n in found.melody)
+
+
+# --- a second melodic part on harder charts ------------------------------------------------
+
+
+def two_part_music():
+    import dataclasses
+
+    lead = [note(i * 8, 2, 62 + (i % 4)) for i in range(8)]  # on slots 0, 8, 16, ...
+    second = [note(i * 8 + 4, 2, 50 + (i % 3)) for i in range(8)]  # between them
+    return dataclasses.replace(music(lead), second_melody=tuple(second))
+
+
+def test_harder_charts_also_follow_the_second_loudest_part() -> None:
+    m = two_part_music()
+    medium = events.melody_events(m, PROFILES["Medium"], columns=7)
+    hard = events.melody_events(m, PROFILES["Hard"], columns=7)
+    assert {e.slot for e in medium} == {i * 8 for i in range(8)}
+    assert {e.slot for e in hard} == {i * 8 for i in range(8)} | {i * 8 + 4 for i in range(8)}
+
+
+def test_the_second_part_sits_where_its_pitch_does_on_the_leads_keyboard() -> None:
+    m = two_part_music()  # lead 62..65; the second part sings well below it
+    hard = events.melody_events(m, PROFILES["Hard"], columns=7)
+    second = [e for e in hard if e.slot % 8 == 4]
+    lead = [e for e in hard if e.slot % 8 == 0]
+    assert all(e.lane == 0.0 for e in second)  # below the lead's whole range: the lowest lane
+    assert max(e.lane for e in lead) == pytest.approx(6.0, abs=0.01)
+
+
+def test_the_lead_wins_a_slot_both_parts_want() -> None:
+    import dataclasses
+
+    m = dataclasses.replace(
+        music([note(8, 2, 64)]), second_melody=(note(8, 2, 50),)
+    )
+    chosen = events.select_events(m, PROFILES["Hard"], columns=7)
+    (event,) = [e for e in chosen if e.slot == 8]
+    assert event.lane != 0.0 or event.score > 0  # still one event...
+    lead_only = events.melody_events(dataclasses.replace(m, second_melody=()), PROFILES["Hard"], 7)
+    assert event.score == pytest.approx(lead_only[0].score)  # ...and it is the lead's
+
+
+def test_second_part_is_the_quieter_instrument_within_six_decibels(click_wav, vocal_wav) -> None:
+    # the voice leads; the strings are 4 dB under it: close enough to be a second part
+    close = lead_stems(click_wav, vocal_wav, other_track(0.0, gain=0.5 * 10 ** (-4 / 20)))
+    found = stem_music(click_wav, close)
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) > 3 for n in found.melody)
+    assert len(found.second_melody) >= 60
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) < 0.6 for n in found.second_melody)
+    assert len(found.second_onsets) >= 60
+
+    # 12 dB under: background, not a part worth a key
+    far = lead_stems(click_wav, vocal_wav, other_track(0.0, gain=0.5 * 10 ** (-12 / 20)))
+    assert stem_music(click_wav, far).second_melody == ()
+
+
+def test_when_the_strings_lead_the_voice_is_the_second_part(click_wav, vocal_wav) -> None:
+    loud_strings = lead_stems(click_wav, vocal_wav, other_track(0.0, gain=0.5 * 10 ** (4 / 20)))
+    found = stem_music(click_wav, loud_strings)
+    on_the_grid = [
+        n for n in found.melody if 0 <= (n.start - found.first_beat_time) / found.slot_seconds < found.n_slots
+    ]  # notes before the first beat or past the last whole measure never reach a chart
+    assert len(on_the_grid) >= 60
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) < 0.6 for n in on_the_grid)
+    assert len(found.second_melody) >= 60
+    assert all(abs(n.pitch - LEAD_NOTE_MIDI) > 3 for n in found.second_melody)
+
+
+def test_music_facts_list_the_second_part_apart_from_the_melody() -> None:
+    m = two_part_music()
+    facts = events.music_facts(m, bpm=137.7, chart_source="stems")
+    assert len(facts["melody"]) == 8 and len(facts["second_melody"]) == 8
+    assert facts["second_melody"][0]["slot"] == 4 and facts["second_melody"][0]["midi"] == 50
+    assert events.music_facts(music(), bpm=137.7, chart_source="stems")["second_melody"] == []
+
+
+def test_music_facts_say_who_leads_each_measure() -> None:
+    import dataclasses
+
+    lead = np.arange(N_SLOTS) >= N_SLOTS // 2  # the second half of the song is led by the others
+    m = dataclasses.replace(music([note(8, 4, 62.2)]), lead_other=lead)
+    facts = events.music_facts(m, bpm=137.7, chart_source="stems")
+    measures = N_SLOTS // SLOTS_PER_MEASURE
+    assert facts["lead"] == ["vocals"] * (measures // 2) + ["other"] * (measures // 2)
+    assert "lead" not in events.music_facts(music(), bpm=137.7, chart_source="stems")
+
+
 def test_music_features_pad_or_trim_to_the_chart_grid(click_wav, vocal_wav) -> None:
     from video2sm import beats, dsp
 

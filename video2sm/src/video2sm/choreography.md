@@ -7,7 +7,8 @@ the video) and check (playability). **You decide how the fingers should move.**
 
 ## What a good chart feels like
 
-- **It answers the music.** Every note is something audible: a sung note, a kick, a snare.
+- **It answers the music.** Every note is something audible: a sung note (or the strings'
+  line where they are louder than the voice), a kick, a snare.
   Where the music rests, the chart rests. A note with nothing to hear nearby feels random.
 - **It has a shape that repeats.** Pick a small vocabulary of rhythm cells for a section
   (for example "downbeat, and-of-2, beat 4") and reuse it. When the music repeats (the

@@ -45,6 +45,8 @@ class Profile:
     # Stem-based charts: how much each musical part contributes, and how many of the
     # (typically long) melody notes become holds.
     melody_weight: float = 1.0
+    # how many melodic parts (the loudest, then the next) the chart follows
+    melodic_parts: int = 1
     kick_weight: float = 0.0
     snare_weight: float = 0.0
     hat_weight: float = 0.0
@@ -58,9 +60,9 @@ PROFILES: tuple[Profile, ...] = (
     Profile("Medium", 4, 2.3, (1.0, 0.0, 0.85, 0.0), 2, 2, True, 1.1, 0.02, 0.04,
             kick_weight=0.8, snare_weight=0.7, hat_weight=0.1, melody_hold_ratio=0.14),
     Profile("Hard", 6, 3.3, (1.0, 0.35, 0.85, 0.35), 1, 2, True, 0.95, 0.06, 0.06,
-            kick_weight=0.9, snare_weight=0.9, hat_weight=0.4, melody_hold_ratio=0.18),
+            melodic_parts=2, kick_weight=0.9, snare_weight=0.9, hat_weight=0.4, melody_hold_ratio=0.18),
     Profile("Challenge", 9, 4.5, (1.0, 0.6, 0.9, 0.6), 1, 3, True, 0.8, 0.10, 0.08,
-            kick_weight=1.0, snare_weight=1.0, hat_weight=0.7, melody_hold_ratio=0.22),
+            melodic_parts=2, kick_weight=1.0, snare_weight=1.0, hat_weight=0.7, melody_hold_ratio=0.22),
 )
 PROFILE_BY_NAME = {p.name.lower(): p for p in PROFILES}
 DEFAULT_DIFFICULTIES = ("beginner", "low", "medium", "high")

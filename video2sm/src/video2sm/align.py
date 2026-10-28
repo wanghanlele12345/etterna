@@ -65,7 +65,8 @@ def _notes(block: ChartBlock, columns: int, first_beat: float, slot_seconds: flo
 
 def _targets(facts: dict[str, Any], first_beat: float, slot_seconds: float) -> np.ndarray:
     times = [
-        n.get("start_time", first_beat + n["slot"] * slot_seconds) for n in facts.get("melody", [])
+        n.get("start_time", first_beat + n["slot"] * slot_seconds)
+        for n in facts.get("melody", []) + facts.get("second_melody", [])
     ]
     for hits in facts.get("drum_times", {}).values():
         times.extend(hits)

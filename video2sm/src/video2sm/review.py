@@ -198,7 +198,7 @@ def _similar_earlier(sigs: list[frozenset], m: int) -> list[tuple[int, float]]:
 def _hit_slots(facts: dict[str, Any] | None) -> set[int] | None:
     if facts is None:
         return None
-    hits = {n["slot"] for n in facts.get("melody", [])}
+    hits = {n["slot"] for n in facts.get("melody", []) + facts.get("second_melody", [])}
     for slots in facts.get("drums", {}).values():
         hits.update(slots)
     return hits

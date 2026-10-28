@@ -171,6 +171,16 @@ def test_stats_flag_notes_with_nothing_to_hear(tmp_path: Path) -> None:
     assert stats["unsupported_notes"] == 8 and stats["supported_share"] == 0.0
 
 
+def test_a_note_on_the_second_part_has_something_to_hear(tmp_path: Path) -> None:
+    path = build_song(tmp_path, measures=[measure_from({2: row(1)}), measure_from({})])
+    assert review.inspect_chart(path, "Easy", 0, 1)["stats"]["unsupported_notes"] == 1  # nothing near slot 2
+    facts_path = tmp_path / "music.json"
+    facts = json.loads(facts_path.read_text(encoding="utf-8"))
+    facts["second_melody"] = [{"slot": 2, "length_slots": 2, "midi": 50, "name": "D3", "strength": 1.0}]
+    facts_path.write_text(json.dumps(facts), encoding="utf-8")
+    assert review.inspect_chart(path, "Easy", 0, 1)["stats"]["unsupported_notes"] == 0
+
+
 # --- editing ----------------------------------------------------------------------------------
 
 

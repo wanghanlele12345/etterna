@@ -47,9 +47,12 @@ Charts are 7-key (kb7-single, the default: S D F space J K L), 4-key (dance-sing
 and/or 9-key (pnm-nine, pop'n) via key_modes;
 medium and harder charts include hold notes unless holds is false.
 
-Charts follow the music when Demucs is installed (chart_source auto/stems): the vocal
-melody sets which lane each note is on (higher pitch, further right) and long sung notes
-become holds, with kick/snare/hi-hat from the drum stem filling in. Without Demucs, or with
+Charts follow the music when Demucs is installed (chart_source auto/stems): the melody
+sets which lane each note is on (higher pitch, further right) and long sung notes become
+holds, with kick/snare/hi-hat from the drum stem filling in. The melody is the voice's,
+except in measures where the other instruments (strings, guitar, piano) are clearly louder,
+where it is theirs (music.json "lead" says who leads each measure); Hard and Challenge also
+follow the second loudest melodic part ("second_melody"). Without Demucs, or with
 chart_source "mix", notes come from onsets in the full mix only. analyze_video_notes
 shows what was heard (melody notes, drum hits) without creating anything.
 If the notes feel early or late in-game, call adjust_song_offset with a small
@@ -247,8 +250,8 @@ def analyze_video_notes(video_path: str, max_notes: int = 200) -> dict[str, Any]
     """Read the music's notes without creating any files.
 
     Separates the audio into vocals and drums (needs Demucs; the first run on a song takes
-    about a minute, later runs use a cache), then returns the tempo, the vocal melody as a
-    list of notes (time, length, MIDI number, note name, loudness), the pitch range, and how
+    about a minute, later runs use a cache), then returns the tempo, the lead melody (the
+    voice, or the other instruments where they are louder) as a list of notes (time, length, MIDI number, note name, loudness), the pitch range, and how
     many kick, snare and hi-hat hits were found.
 
     Args:

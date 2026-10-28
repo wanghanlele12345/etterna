@@ -50,6 +50,18 @@ def test_notes_move_onto_the_attacks_they_answer(tmp_path: Path) -> None:
     assert chart["max_shift_ms"] == pytest.approx(40, abs=6)
 
 
+def test_notes_also_move_onto_the_attacks_of_the_second_part(tmp_path: Path) -> None:
+    path = two_measure_song(tmp_path, {0: row(4), 8: row(5)})  # notes at 0.0 s and 1.0 s
+    set_facts(path, melody=[(0.03, 0.5)])
+    facts_path = path.parent / "music.json"
+    facts = json.loads(facts_path.read_text(encoding="utf-8"))
+    facts["second_melody"] = [{"slot": 10, "length_slots": 2, "midi": 50, "name": "D3", "strength": 1.0,
+                               "start_time": 1.04, "end_time": 1.5}]
+    facts_path.write_text(json.dumps(facts), encoding="utf-8")
+    align.align_chart(path, "Easy")
+    assert sorted(t for t, _, _ in note_times(path)) == pytest.approx([0.03, 1.04], abs=0.006)
+
+
 def test_notes_with_nothing_close_stay_on_the_grid(tmp_path: Path) -> None:
     path = two_measure_song(tmp_path, {0: row(4), 8: row(5)})
     set_facts(path, melody=[(0.30, 0.5)])  # 300 ms from the first note: too far to be its attack

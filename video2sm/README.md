@@ -35,9 +35,18 @@ the six most common rhythm patterns, a measure of how regular the chart is.
    where the drum stem is within 40 dB of the whole mix count as drums: separation leaks a
    trace of everything into the drum stem, and in a drumless verse that leak would
    otherwise read as hits.
+   The melody follows whichever instrument is loudest: the voice by default, the other
+   instruments (strings, guitar, piano... the `other` stem) in measures where they are at
+   least 3 dB louder than the voice and really playing. An instrumental intro is charted
+   from the strings, not left empty. `music.json` lists the lead of each measure (`lead`).
+   The part that is not leading (the voice under loud strings, or the strings under the
+   voice) is kept as a second melodic part wherever it is within 6 dB of the lead
+   (`second_melody`).
 4. Charts follow the music: each melody note becomes a chart note on its sung onset, in
    the lane its pitch maps to (higher pitch, further right); long sung notes become holds;
-   drum hits fill in around the vocal line, more of them as difficulty rises.
+   drum hits fill in around the vocal line, more of them as difficulty rises. Hard and
+   Challenge also follow the second melodic part, on the same keyboard as the lead and
+   never outbidding it for a slot; easier charts follow the lead only.
 5. **Without Demucs** (or `chart_source: "mix"`): onsets are found in the full mix instead,
    snapped to a 16th-note grid, and columns are assigned by hand alternation and band.
 6. The `.ssc` is rendered, re-parsed, and validated before it is reported as done.
