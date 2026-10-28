@@ -37,6 +37,9 @@ _SNAP_REACH_SLOTS = 1
 _MIN_DRUM_HIT = 0.5  # share of the way from a band's noise floor to its loud hits
 _DRUM_PEAK_PERCENTILE = 95.0
 _MIN_DRUM_PEAK = 1.0  # a band whose loudest hits are fainter than this has no clear hits
+# Drums this far under everything heard in a measure are separation leak, not a drummer:
+# over whole measures, played drums sit 8-35 dB under the mix and leak 50 dB or more.
+_DRUMS_PLAYING_DB = -40.0
 _PITCH_LOW_PERCENTILE = 5.0
 _PITCH_HIGH_PERCENTILE = 95.0
 _MIN_PITCH_SPREAD = 2.0  # semitones; a flatter melody all sits on the middle lane
@@ -58,6 +61,8 @@ class MusicFeatures:
     # exact attack times in seconds, for aligning notes to the audio afterwards
     vocal_onsets: tuple[float, ...] = ()
     drum_onsets: tuple[tuple[float, ...], ...] = ((), (), ())  # kick, snare, hat bands
+    # (n_slots,): whether a drummer plays in the slot's measure; None = throughout
+    drums_playing: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -82,16 +87,61 @@ def music_from_stems(stems: Stems, analysis: BeatAnalysis, n_slots: int) -> Musi
     """Read the vocal melody and drum hits of separated stems onto the chart's grid."""
     drums = features.extract_grid_features(stems.drums, analysis)
     vocals = features.extract_grid_features(stems.vocals, analysis)
+    measure_seconds = drums.slot_seconds * SLOTS_PER_MEASURE
+    playing = drums_playing(stems, drums.first_beat_time, measure_seconds, n_slots)
+    playing_slots = np.repeat(playing, SLOTS_PER_MEASURE)[:n_slots]
     return MusicFeatures(
         n_slots=n_slots,
         slot_seconds=drums.slot_seconds,
         first_beat_time=drums.first_beat_time,
-        drum_strengths=_fit(drums.strengths, n_slots),
+        drum_strengths=_fit(drums.strengths, n_slots) * playing_slots[:, None],
         vocal_strengths=_fit(vocals.strengths.max(axis=1), n_slots),
         melody=tuple(melody.transcribe(stems.vocals)),
         vocal_onsets=tuple(timing.onset_times(stems.vocals)),
-        drum_onsets=band_onsets(stems.drums),
+        drum_onsets=tuple(
+            _while_playing(band, playing, drums.first_beat_time, measure_seconds)
+            for band in band_onsets(stems.drums)
+        ),
+        drums_playing=playing_slots,
     )
+
+
+def drums_playing(
+    stems: Stems, first_beat_time: float, measure_seconds: float, n_slots: int
+) -> np.ndarray:
+    """Per measure of the grid, whether a drummer is playing in it.
+
+    Separation leaks a trace of every instrument into the drum stem, and onset strength is
+    measured on a log scale, so in a drumless verse that leak reads as hits as crisp as
+    real ones. Power over a whole measure (which the hits dominate) tells them apart.
+    """
+    drum = stems.drums.samples.astype(np.float64)
+    mix = stems.mixed().samples.astype(np.float64)
+    rate = stems.drums.sample_rate
+    n_measures = -(-n_slots // SLOTS_PER_MEASURE)
+    playing = np.zeros(n_measures, dtype=bool)
+    for m in range(n_measures):
+        lo = max(0, int((first_beat_time + m * measure_seconds) * rate))
+        hi = min(len(mix), int((first_beat_time + (m + 1) * measure_seconds) * rate))
+        if hi <= lo:
+            continue
+        mix_power = float(np.mean(mix[lo:hi] ** 2))
+        if mix_power > 0:
+            ratio = float(np.mean(drum[lo:hi] ** 2)) / mix_power
+            playing[m] = 10 * np.log10(max(ratio, 1e-12)) >= _DRUMS_PLAYING_DB
+    return playing
+
+
+def _while_playing(
+    onsets, playing: np.ndarray, first_beat_time: float, measure_seconds: float
+) -> tuple[float, ...]:
+    """The onsets that fall in a measure where the drums play."""
+    times = np.asarray(onsets, dtype=np.float64)
+    index = np.floor((times - first_beat_time) / measure_seconds).astype(np.int64)
+    inside = (index >= 0) & (index < len(playing))
+    keep = np.zeros(len(times), dtype=bool)
+    keep[inside] = playing[index[inside]]
+    return tuple(float(t) for t in times[keep])
 
 
 def band_onsets(audio) -> tuple[tuple[float, ...], ...]:
@@ -161,21 +211,29 @@ def melody_events(music: MusicFeatures, profile: Profile, columns: int) -> list[
     return found
 
 
-def _drum_hits(strengths: np.ndarray) -> np.ndarray:
+def _drum_hits(strengths: np.ndarray, playing: np.ndarray | None = None) -> np.ndarray:
     """Per band, 0..1 where 0 is the band's noise floor (its median) and 1 its loud hits.
 
     Onset strength is never near zero in real music, so a fixed threshold would call the
     background hum a hit; measuring from each band's own floor keeps only real peaks.
+    The floor is taken only where the drums play (`playing`, per slot): a long drumless
+    stretch would otherwise drag it down and turn the flux between real hits into hits.
     """
-    floor = np.median(strengths, axis=0)
-    peak = np.maximum(np.percentile(strengths, _DRUM_PEAK_PERCENTILE, axis=0), _MIN_DRUM_PEAK)
-    hits = np.clip((strengths - floor) / (peak - floor), 0.0, 1.0)
-    return np.where(hits >= _MIN_DRUM_HIT, hits, 0.0)
+    playing = np.ones(len(strengths), dtype=bool) if playing is None else playing[: len(strengths)]
+    if not playing.any():
+        return np.zeros_like(strengths)
+    floor = np.median(strengths[playing], axis=0)
+    peak = np.maximum(
+        np.percentile(strengths[playing], _DRUM_PEAK_PERCENTILE, axis=0), _MIN_DRUM_PEAK
+    )
+    span = peak - floor  # a band whose floor is already its peak has no hits standing out
+    hits = np.clip((strengths - floor) / np.where(span > 0, span, np.inf), 0.0, 1.0)
+    return np.where((hits >= _MIN_DRUM_HIT) & playing[:, None], hits, 0.0)
 
 
 def drum_events(music: MusicFeatures, profile: Profile) -> list[Event]:
     weights = np.array([profile.kick_weight, profile.snare_weight, profile.hat_weight])
-    scored = _drum_hits(music.drum_strengths[: music.n_slots]) * weights
+    scored = _drum_hits(music.drum_strengths[: music.n_slots], music.drums_playing) * weights
     found = []
     for slot in range(len(scored)):
         position = _position_weight(profile, slot)

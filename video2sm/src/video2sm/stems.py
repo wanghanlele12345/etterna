@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from . import dsp
 from .errors import AnalysisError
 
@@ -36,6 +38,13 @@ class Stems:
     drums: dsp.Audio
     bass: dsp.Audio
     other: dsp.Audio
+
+    def mixed(self) -> dsp.Audio:
+        """The stems summed back together: what the listener hears."""
+        parts = (self.vocals, self.drums, self.bass, self.other)
+        length = min(len(p.samples) for p in parts)
+        samples = sum((p.samples[:length] for p in parts), np.zeros(length, dtype=np.float32))
+        return dsp.Audio(samples=samples, sample_rate=self.drums.sample_rate)
 
 
 def _installed(name: str) -> bool:

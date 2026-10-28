@@ -31,7 +31,10 @@ the six most common rhythm patterns, a measure of how regular the chart is.
 2. Beat analysis finds BPM and the first beat (accurate to ~1 ms on clean tracks).
 3. **With Demucs installed (the default when available):** the song is separated into
    vocals / drums / bass / other. The vocal melody is transcribed into notes (pYIN pitch
-   tracking), and kick / snare / hi-hat hits are read from the drum stem.
+   tracking), and kick / snare / hi-hat hits are read from the drum stem. Only measures
+   where the drum stem is within 40 dB of the whole mix count as drums: separation leaks a
+   trace of everything into the drum stem, and in a drumless verse that leak would
+   otherwise read as hits.
 4. Charts follow the music: each melody note becomes a chart note on its sung onset, in
    the lane its pitch maps to (higher pitch, further right); long sung notes become holds;
    drum hits fill in around the vocal line, more of them as difficulty rises.

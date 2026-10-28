@@ -116,6 +116,32 @@ def test_faint_drum_noise_is_ignored() -> None:
     assert events.drum_events(music(drums=drums), PROFILES["Challenge"]) == []
 
 
+def test_a_long_drumless_stretch_does_not_lower_the_bar_for_hits() -> None:
+    import dataclasses
+
+    # no drummer for three quarters of the song; where one plays, the flux between
+    # the hits is still background, not more hits
+    drums = np.zeros((N_SLOTS, 3))
+    start = 3 * N_SLOTS // 4
+    drums[start:, 0] = 0.9
+    drums[start::4, 0] = 1.8
+    playing = np.arange(N_SLOTS) >= start
+    m = dataclasses.replace(music(drums=drums), drums_playing=playing)
+    found = events.drum_events(m, PROFILES["Challenge"])
+    assert found and all(e.slot % 4 == 0 for e in found)
+
+
+def test_no_drum_hits_where_no_drummer_plays() -> None:
+    import dataclasses
+
+    drums = drum_hits(kick=[0, 16, 48], snare=[8, 40])
+    playing = np.arange(N_SLOTS) >= 32
+    m = dataclasses.replace(music(drums=drums), drums_playing=playing)
+    assert {(e.slot, e.kind) for e in events.drum_events(m, PROFILES["Challenge"])} == {
+        (48, "kick"), (40, "snare")
+    }
+
+
 # --- selection ---------------------------------------------------------------------------
 
 
@@ -204,6 +230,57 @@ def test_music_features_from_stems(click_wav, vocal_wav) -> None:
     assert np.median([np.min(np.abs(sung - b)) for b in beat_times]) < 0.015
     kicks_heard = np.array(found.drum_onsets[0])
     assert np.median([np.min(np.abs(kicks_heard - b)) for b in beat_times]) < 0.015
+
+
+def with_drum_gain(stems_, gain):
+    """The same stems with the drums scaled sample by sample."""
+    import dataclasses
+
+    from video2sm import dsp
+
+    drums = dsp.Audio(samples=(stems_.drums.samples * gain).astype(np.float32), sample_rate=stems_.drums.sample_rate)
+    return dataclasses.replace(stems_, drums=drums)
+
+
+def stem_music(click_wav, stems_):
+    from video2sm import beats, dsp, features
+
+    mix = dsp.load_audio(click_wav)
+    analysis = beats.analyze_beats(mix)
+    n_slots = features.extract_grid_features(mix, analysis).n_slots
+    return events.music_from_stems(stems_, analysis, n_slots)
+
+
+def test_drums_buried_far_under_the_music_are_stem_bleed(click_wav, vocal_wav) -> None:
+    # Separation leaks a trace of the mix into the drum stem. In the first half the drums
+    # sit 60 dB under the singing: that is leak, not a drummer, however crisp it looks
+    # on a log-scale onset envelope.
+    stems_ = synthetic_stems(click_wav, vocal_wav)
+    half = len(stems_.drums.samples) // 2
+    gain = np.ones_like(stems_.drums.samples)
+    gain[:half] = 10 ** (-60 / 20)
+    found = stem_music(click_wav, with_drum_gain(stems_, gain))
+
+    half_time = half / stems_.drums.sample_rate
+    measure = SLOTS_PER_MEASURE * found.slot_seconds  # the measure straddling the change may count
+    hit_times = [
+        found.first_beat_time + e.slot * found.slot_seconds
+        for e in events.drum_events(found, PROFILES["Challenge"])
+    ]
+    assert min(hit_times) > half_time - measure
+    assert sum(t > half_time for t in hit_times) >= 30
+    for band in found.drum_onsets:
+        assert band and min(band) > half_time - measure
+    assert len(found.melody) >= 60  # the singing is untouched
+
+
+def test_a_soft_drum_part_still_counts(click_wav, vocal_wav) -> None:
+    stems_ = synthetic_stems(click_wav, vocal_wav)
+    soft = with_drum_gain(stems_, np.full_like(stems_.drums.samples, 10 ** (-25 / 20)))
+    found = stem_music(click_wav, soft)
+    kicks = [e for e in events.drum_events(found, PROFILES["Challenge"]) if e.kind == "kick"]
+    assert len(kicks) >= 60
+    assert len(found.drum_onsets[0]) >= 60
 
 
 def test_music_features_pad_or_trim_to_the_chart_grid(click_wav, vocal_wav) -> None:
