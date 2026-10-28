@@ -113,7 +113,11 @@ public:
 	NSRect contentRect = { { 0, 0 }, { static_cast<CGFloat>(p.width), static_cast<CGFloat>(p.height) } };	
 
 	[m_Window setContentSize:contentRect.size];
-	[m_Window setTitle:[NSString stringWithUTF8String:p.sWindowTitle.c_str()]];		
+	// Keep the window's shape when it is dragged larger or smaller: the picture
+	// scales in proportion instead of stretching.
+	if( p.windowed && p.width > 0 && p.height > 0 )
+		[m_Window setContentAspectRatio:contentRect.size];
+	[m_Window setTitle:[NSString stringWithUTF8String:p.sWindowTitle.c_str()]];
 	[m_Window center];
 	[m_Window makeKeyAndOrderFront:nil];
 }
