@@ -1,0 +1,50 @@
+[project]
+name = "video2sm"
+version = "0.1.0"
+description = "MCP server that turns a music video into a playable Etterna/StepMania simfile package"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "librosa>=1.0.0",
+    "mcp>=2.3.0",
+    "numpy>=2.5.4",
+    "pillow>=10.1",
+    "setuptools<81",  # simfile still imports pkg_resources
+    "simfile>=2.1.1",
+    "soundfile>=0.14.0",
+    "yt-dlp>=2026.10.21",
+]
+
+[project.optional-dependencies]
+# Separates songs into vocals / drums / bass / other so charts can follow the melody.
+stems = [
+    "demucs>=4.0.1",
+    "torch>=2.2",
+    "torchaudio>=2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[project.scripts]
+video2sm-mcp = "video2sm.server:main"
+video2sm-review = "video2sm.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.6,<0.11.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:pkg_resources is deprecated:UserWarning",
+    "ignore:Deprecated call to `pkg_resources:DeprecationWarning",
+    "ignore::DeprecationWarning:pkg_resources",
+]
